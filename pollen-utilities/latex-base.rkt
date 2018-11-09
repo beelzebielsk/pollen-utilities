@@ -2,18 +2,23 @@
 (require 
   "utility.rkt" "utility/manual-traverse.rkt"
   txexpr pollen/decode pollen/core pollen/tag)
-(provide macro environment group define-math-tag ->ltx $ $$ ensure-math)
+(provide macro macro-1 environment group define-math-tag ->ltx $ $$
+         ensure-math)
 (provide split-bullets store-args)
-;(provide (all-defined-out))
 
+; any/c -> any/c
+; Returns a truthy value is the argument is considered to be
+; whitespace.
 (define (whitespace? val)
   (and (string? val) (regexp-match #px"^\\s*$" val)))
+; any/c -> any/c
+; Returns a truthy value is the argument is considered to be
+; a newline.
 (define (newline? val)
   (and (whitespace? val) (string-contains? val "\n")))
 (define (math-flatten xexpr)
   (cond [(is-tag? xexpr 'math)
-         (decode xexpr
-                 #:txexpr-proc (decode-flattener #:only '(ensure-math)))]
+         (flatten-tags xexpr #:only '(ensure-math))]
         ; We know that this is not contained within a math tag, for if
         ; it were, the above branch would have been taken already, and
         ; decode would've been applied to this tag.
@@ -38,7 +43,6 @@
     (let [(result ((lambda (attrs elems) body ...) attrs elems))]
       (ensure-math result))))
 
-
 ; - Core tags
 ;   - macro : For latex macros.
 ;   - environment : For latex environments.
@@ -46,9 +50,6 @@
 ;   - symbol : Represents stuff that's actually one output character.
 ;     macros that translate to a single output character. Will also
 ;     have other connotations of being things meant for math mode.
-;   - list : Moving this here because there's a lot of necessary
-;     transformations in going from a 'l 'ol or 'eql to a 'list. It's
-;     best to keep the transformation as part of ->ltx.
 ; - Convenience tags
 ;   - ol (ordered list)
 ;       - Initially, it will have a mixture of 'i tags and lines that
@@ -70,14 +71,24 @@
 ;       - After processing, all lines of plain text will become a
 ;         'cell tag.
 
+; TODO: Modify to allow for different group start and group end
+; characters. The default is "{" for group start and "}" for group
+; end.
 (define (macro-args args)
   (add-between args '("}{")
                #:splice? #t
                #:before-first '("{")
                #:after-last '("}")))
+; (listof txexpr-elements?) -> (listof txexpr?)
+; Takes a list of txexpr-elements? and encases each of those lists in
+; 'arg tags.
 (define (store-args args)
   (map (λ (a) (txexpr 'arg null a)) args))
 
+(define (core? val)
+  (or (string? val)
+      (apply is-tag? val
+             '(macro math environment symbol))))
 ; (or/c string? symbol?) (listof core?) ...
 ; This tag represents a latex macro. The first argument is the name of
 ; the macro.
@@ -87,6 +98,23 @@
   (txexpr 'macro 
           `((start "{") (end "}") (name ,(~a name)))
           (store-args args)))
+; A convenience functions for latex macros which use only a single
+; argument. With this, you no longer have to create a list around the
+; elements of the 1st argument to the macro.
+(define (macro-1 name . args)
+  (macro name args))
+
+; core? ... -> txexpr?
+; Takes a series of core? and encases them within 'symbol tag.
+; Signifies that the contents should all be considered a single
+; symbol (character). Example use: (tex-symbol (macro 'pi)). That
+; macro will become the greek lowercase letter pi.
+; TODO: Handle non-math-mode symbols. I THINK that they exist, but I'm
+; not sure.
+(define (tex-symbol . args)
+  (txexpr 'symbol
+          `((requires-math "true"))
+          args))
 
 ; (or/c string? symbol?) (listof core?)
 ;   #:before-args (listof core?)
@@ -116,6 +144,11 @@
              ,(txexpr 'body null body))))
 
 
+; txexpr-elements? symbol? -> (listof (or/c txexpr? string?))
+; Takes a list of txexpr-element? and the name of a tag to regard as a
+; list-item. The result is a list of list items and strings containing
+; whitespace. Collects elements until a newline? is encountered, and
+; wraps those elements in a txexpr of name list-tag.
 ; splits a list of txexpr-elements? where there are newline? elements,
 ; or there are tags of a predefined type (typically 'i). The tags
 ; where splits happened are kept, the newlines are thrown away.
@@ -132,19 +165,27 @@
     (λ (current . _) 
        (txexpr list-tag null current))))
 
+; txexpr-elements? regexp? symbol? -> (listof txexpr?)
+; Takes a list of txexpr-element?, a regular expression representing
+; the prefix of a string that represents an element of a list, and
+; finally the name of the txexpr that should represent an element of a
+; list (this allows you to intermix plain-text list items and
+; list-items as txexprs).
+; The result is a list of txexpr? with the name given by list-tag.
 (define (split-bullets lst bullet-pattern list-tag)
   ; Keep looking through whitespace until you see a bullet. If you
-  ; don't find this bullet, then return nothing. Otherwise, return the
+  ; don't find this bullet, then return false. Otherwise, return the
   ; series of whitespace and the bullet item itself.
   (define (scan-until-next-bullet items bullet?)
     (let ([item (first items)])
-      (cond [(whitespace? item)
-             (let ([up-to-bullet (scan-until-next-bullet (rest items) bullet?)])
-               (if up-to-bullet 
-                 (cons item up-to-bullet) 
-                 up-to-bullet))]
-            [(bullet? item) (list item)]
-            [else #f])))
+      (cond 
+        [(whitespace? item)
+         (let ([up-to-bullet (scan-until-next-bullet (rest items) bullet?)])
+           (if up-to-bullet 
+             (cons item up-to-bullet) 
+             up-to-bullet))]
+        [(bullet? item) (list item)]
+        [else #f])))
   (define (bullet? elem) 
     (and (string? elem) 
          (regexp-match bullet-pattern elem)))
@@ -173,13 +214,14 @@
 (define (remove-empty-items items)
   (decode-elements items
                    #:txexpr-proc 
-                   (λ (tx) (if (and (is-tag? tx 'i)
-                                    ((listof newline?) (get-elements tx)))
+                   (λ (tx) 
+                      (if (and (is-tag? tx 'i)
+                               ((listof whitespace?) (get-elements tx)))
                                null
                                tx))))
 (define (l . elems)
   (let* ([items (split-bullets elems #px"^\\s*-" 'i)]
-        [cleaned (remove-empty-items items)])
+         [cleaned (remove-empty-items items)])
     (txexpr 'list '((type "unordered")) cleaned)))
 
 (define (ol . elems)
@@ -203,6 +245,12 @@
 ; - If an 'i tag appears whose indentation level is less than the
 ;   level of the current 'i tag, then the current 'list tag is ended.
 (define (level-lists list-txexpr list-type)
+  ; TODO: Make this calculation account for tabs with a tab width,
+  ; optionally. Take away the dividing, too. There's no need to guard
+  ; against weird indentation levels. We don't have to set which
+  ; indents we do. All this code depends on is whether or not the
+  ; current indentation level is >, =, or < then the current
+  ; indentation level.
   (define (get-list-level item)
     (let* ([bullet (first (get-elements item))]
            [indent (first (regexp-match #px"^\\s*" bullet))])
@@ -212,13 +260,16 @@
   ; This function takes in a list of things processed so far (to be
   ; explained in a bit), and a list of remaining stuff to process, and
   ; adds on the result of processing the remaining stuff onto the
-  ; stuff processed so far.
+  ; stuff processed so far. It returns (cons processed-stuff
+  ; unprocessed-tokens).
   ; so-far is a list of items and lists.
   (define (descender so-far remaining-tokens)
     (cond [(null? so-far)
            (descender (list (first remaining-tokens)) 
                       (rest remaining-tokens))]
           [(null? remaining-tokens) 
+           ; This is correct because descender always returns 
+           ; (cons processed-stuff unprocessed-tokens)
            (cons so-far null)]
           [(not (is-tag? (first remaining-tokens) 'i))
            (descender (cons (first remaining-tokens) so-far)
@@ -227,7 +278,14 @@
             (let* 
               ([elem (first remaining-tokens)]
                [rst (rest remaining-tokens)]
+               ; NOTE: The stuff in so-far is contained in stack
+               ; order. So the car is the thing most recently
+               ; encountered. Thus the 1st encountered item tag is the
+               ; previous item.
                [previous-item (findf (λ (v) (is-tag? v 'i)) so-far)]
+               ; TODO: Consider making this a parameter of descender.
+               ; Faster than constantly searching backward for the
+               ; previous item.
                [current-level (if previous-item
                                 (get-list-level previous-item)
                                 0)]
@@ -256,11 +314,11 @@
   ;(txexpr 'row null (split-list-at-tag-or-newline elems)))
 
 
-; txexpr? -> txexpr?
+; txexpr-elements? -> txexpr?
 ; This takes one of the convenience layer tags and transforms it into
 ; core-level tags. All user-defined tags should already be strings by
 ; this point in time.
-(define (convenience->core txpr)
+(define (convenience->core elements)
   (define (user-lists->list-tags txpr)
     (apply-tags 
       txpr
@@ -283,6 +341,9 @@
     (txexpr (get-tag txpr)
             (get-attrs txpr)
             (append elements (get-elements txpr))))
+  ; txexpr? -> txexpr?
+  ; Takes an 'i tag and removes the bullet, replacing it with an 'item
+  ; macro.
   (define (transform-items txpr)
     (decode
       txpr
@@ -309,7 +370,8 @@
                        (case type
                          [("unordered") 'itemize]
                          [("ordered") 'enumerate]
-                         [("math") 'align*])]
+                         [("math") 'align*]
+                         [else (~a type)])]
                      [items (get-elements (transform-items tx))]
                      [spaced-out-items
                        (case type 
@@ -318,58 +380,33 @@
                          [("math")
                           (add-between items "\\\\\n")])]
                      [flattened-items
-                       (decode-elements 
-                         spaced-out-items
-                         #:txexpr-proc (decode-flattener #:only '(i)))])
+                       (flatten-tags spaced-out-items #:only '(i))])
                 (environment environment-name flattened-items))))))
-  (list-tags->core
-    (user-lists->list-tags txpr)))
+  (define (to-each-element txpr)
+    (list-tags->core
+      (user-lists->list-tags txpr)))
+  (if (txexpr? elements)
+    (to-each-element elements)
+    (append-map to-each-element elements)))
 
+; (or/c txexpr? txexpr-elements?) -> (or/c txexpr? txexpr-elements?)
+; If this gets a txexpr? then it will return a txexpr? which contains
+; entirely strings. The descendants of the txexpr? are expected to all
+; be core?.
+; If this gets txexpr-elements? then it will return (listof string?). 
+; The txexpr-elements? are expected to be (listof core?).
 (define (core->ltx elements)
-  ; Just redoing select* so that I always get back a list of stuff.
+  ; Like select*, but always returns a list.
   (define (diff-select* tag-name element)
     (let ([result (select* tag-name element)])
       (if result
         result
         null)))
-  ; THis is a misnomer. This transforms part of the macro to strings,
-  ; but it does not transform the arguments to strings.
-  ; However, if you apply this tag recursively to a macro:
-  ; macros contain the following tags, which contain the following
-  ; things:
-  ; name : symbol?
-  ; start : string?
-  ; end : string?
-  ; args : (listof arg)
-  ; arg : (listof (or/c string? macro?))
-  ; The base case for recursive application of macro->string (as if it
-  ; were defined 
-  ; (define (macro->string macro-tag)
-  ;     ...
-  ;     (let ([new-args 
-  ;            (for/list ([i args]) (macro->string i))]) ...)
-  ; The base case for this function is a macro whose args are all
-  ; strings. In this case, macro->string does return a string.
-  ; Suppose that for all macros with macro depth n or less,
-  ; macro->string returns a string. Suppose also that we are calling
-  ; macro->string on a macro of macro depth n + 1.
-  ; Well, the return value of macro-> string is
-  ; - it's formatted name, which is a string.
-  ; - A list, which starts and ends with "{" and "}" respectively, and
-  ;   in between is all the arguments of the macro with the string
-  ;   "}{" in between them. 
-  ; - The macro arguments have already been placed through
-  ;   macro->string, and they must have macro depth of n or less, 
-  ;   (strings have macro depth 0, a macro has macro depth 1 plus the
-  ;   depth of the deepest argument).
-  ; Applying this proof to what occurs below is straightforward, I
-  ; think. Instead of "macro depth" it's "tag depth", where the only
-  ; tags are the core tags. Strings have core tag depth 0, core tags
-  ; have a depth of 1 plus the depth of the deepest core tag that they
-  ; contain.
-  ; From here on out the proof ought to be pretty much the same.
-  ; This proof works assuming that the only tags present in the
-  ; document are core tags (the tags handled by to-each-element).
+  ; Turns a macro into a string, assuming that all of it's arguments
+  ; are strings, too.
+  ; When this function is used as part of to-each-element, this
+  ; assumption will be true, since macro->string will complete first
+  ; for macros whose arguments contain no macros.
   (define (macro->string macro-tag)
     (let* ([name (format "\\~a" (attr-ref macro-tag 'name))]
            [args 
@@ -398,7 +435,7 @@
                           (diff-select* 'args tx))]
                    [body (diff-select* 'body tx)])
                (string-append
-                 (report (macro->string (macro 'begin (list name))))
+                 (report (macro->string (macro-1 'begin name)))
                  (string-join before-args)
                  (if (null? opt-args)
                    ""
@@ -407,17 +444,25 @@
                  "\n"
                  (string-join body "")
                  "\n"
-                 (macro->string (macro 'end (list name)))))))
+                 (macro->string (macro-1 'end name))))))
         (cons 
           'math
-          (λ (tx) (string-join `("$" ,@(get-elements tx) "$") ""))))))
+          (λ (tx) 
+             (let ([surround (if (has-attr? tx 'display) "$$" "$")])
+               (string-join `( ,surround 
+                               ,@(get-elements tx) 
+                               ,surround) "")))))))
   (if (txexpr? elements)
     (to-each-element elements)
     (append-map to-each-element elements)))
+
+; txexpr-elements? -> (listof string?)
 (define (->ltx elements)
   (core->ltx (convenience->core elements)))
 
-
+; In reference to a comment in decode.rkt line 59 in the pollen
+; repository:
+;
 ; I think I understand what he means by avoiding recursive descent.
 ; The decode function could've gone more like:
 ; (cond [(tag? x) (tag-proc x)]
@@ -427,7 +472,7 @@
 ; However, if we did things this way, then what would a value like
 ; '((p "thing")) be? Is it a list of attributes, or a list of
 ; txexpr?
-; We have that knowledge if we work with the whole tag at the same
+; We know the answer to this if we work with the whole tag at the same
 ; time, so he breaks apart a txexpr, transforms the pieces, then puts
 ; them back together appropriately. He does recursive descent on the
 ; child elements, which is the correct thing to do.
@@ -437,10 +482,27 @@
 ; processed. All the children get decoded before the current element
 ; gets decoded. So, for my manual traversal, all the children of an
 ; element have been traversed before the current element has been
-; traversed.
+; traversed. Thus, each tag function can safely assume that all of its
+; children are strings.
 
 ; TODO:
-; - the macro and environment functions have to be available for the
-;   pollen file. 
 ; - Math behavior.
+;   - Display math: If math is display math, then handle the output
+;     correctly. Currently, only inline math is supported.
+;   - Merging adjacent math elements
+;   - Create the 'symbol tag. 
+;       - The symbol tag should contain core? that should be
+;         interpreted as a single character, such as "\\lambda" or
+;         (macro 'lambda). These will result as a single character in
+;         pdf output and thus should be treated this way. 
+;       - Include an attribute for "math-only" or something like that.
+;         For sure, such symbols should be wrapped in math-mode
+;         automatically, or merged with adjacent math elements.
+;   - Merge adjacent math elements and 'symbol tags that require
+;     math mode.
 ; - tables.
+; - Escaping special characters
+;   - Escaping & outside of align and tables.
+;   - Escaping % almost always (except in something like lstlisting
+;     environments or lstlinline commands).
+;   - Escaping lone backslashes.

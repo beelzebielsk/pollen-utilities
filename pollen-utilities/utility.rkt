@@ -3,6 +3,9 @@
 
 ; Pollen Helpers: {{{ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+; A macro which will take an expression, print some information about
+; it, and then replace itself with the original expression. For
+; debugging purposes.
 (define-syntax-rule (report EXPR)
   (let 
     [(result EXPR)
@@ -61,6 +64,10 @@
 
 ; }}} ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(define (is-tag? tag . names)
+  (and (txexpr? tag) (member (get-tag tag) names)))
+(define (has-attr? tag attr)
+  (attrs-have-key? (get-attrs tag) attr))
 ; lambda? -> lambda?
 ; This takes a procedure and alters it so that it is safe to use as
 ; the #:txexpr-proc argument to the decode-elements function. It's a
@@ -73,6 +80,7 @@
     (if (string-prefix? (symbol->string (get-tag tx)) "temp-tag") 
       tx
       (proc tx))))
+
 ; list? list? -> lambda
 ; Takes in one of two optional lists of tags: 
 ; #:only, which specifies which tags to flatten and nothing else.
@@ -94,11 +102,21 @@
                tx
                (get-elements tx)))]))
 
+(define (flatten-tags elements 
+                      #:only [only-these (void)]
+                      #:exclude [except-these (void)])
+  (if (txexpr? elements)
+    (decode elements
+            #:txexpr-proc 
+            (decode-flattener #:only only-these
+                              #:exclude except-these))
+    (decode-elements elements
+                     #:txexpr-proc 
+                     (decode-flattener #:only only-these
+                                       #:exclude except-these))))
+
+
 (define printable? (or/c string? number? symbol?))
-(define (is-tag? tag name)
-  (and (txexpr? tag) (eq? (get-tag tag) name)))
-
-
 ; list? procedure? #:keep-where procedure? -> list?
 ; Somewhat similar to the split procedure for strings. Takes a list
 ; and returns a list of the same elements of lst, in the same order,
@@ -119,7 +137,6 @@
 ; split is normally removed. Not considered. There are use cases where
 ; you wouldn't want to throw away that which you split upon, but you'd
 ; want to run a function over everything else.
-
 (define (split-where lst split-pred? 
           #:keep-where [keep-pred? (λ _ #f)]
           #:split-map [split-func #f]
@@ -177,6 +194,10 @@
                   tail)))]))
   (reverse (iter null null lst)))
 
+; any/c lambda? -> any/c
+; If a value is a list, then it will reverse the list and all lists
+; contained within. If the value is not a list, or it satisfies the
+; leaf? predicate, then the value will be untouched.
 (define (reverse* val [leaf? (λ (v) (not (list? v)))])
   (define (helper val)
     (if (leaf? val)
@@ -184,4 +205,14 @@
       (reverse (map helper val))))
   (helper val))
 
+; list? lambda? -> list?
+; Takes a list and a predicate. Removes all contiguous series of
+; elements at the front and back of the list which satisfy the
+; predicate.
+(define (list-strip lst pred?)
+  (dropf-right (dropf lst pred?) pred?))
+
 (provide (all-defined-out))
+
+; TODO:
+; - make let-splice convert numbers to strings in the final product.
