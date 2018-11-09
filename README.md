@@ -6,8 +6,9 @@ working with pollen.
   source:
     - macro
     - environment
-    - l
-    - eql
+    - l (unordered lists)
+    - ol (ordered lists)
+    - eql (lists of equations)
 - pollen-extensions/utility : This exports some utilities that I've
   found helpful, partly for finding errors, partly for decoding
   textual information into pollen markup. I prefer to have pollen to
