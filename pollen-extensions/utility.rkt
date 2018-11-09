@@ -97,6 +97,8 @@
 (define printable? (or/c string? number? symbol?))
 (define (is-tag? tag name)
   (and (txexpr? tag) (eq? (get-tag tag) name)))
+
+
 ; list? procedure? #:keep-where procedure? -> list?
 ; Somewhat similar to the split procedure for strings. Takes a list
 ; and returns a list of the same elements of lst, in the same order,
@@ -117,96 +119,6 @@
 ; split is normally removed. Not considered. There are use cases where
 ; you wouldn't want to throw away that which you split upon, but you'd
 ; want to run a function over everything else.
-;
-; TODO:
-; Consider splitting this into two functions:
-; - a splitter-function, which handled the iteration over the
-;   elements, and expects a function which determines the next state
-;   of everything. Like, the output of this function will be the next
-;   current split, the next list of splits, and the new value of the
-;   remaining elements to iterate upon.
-; - A function which takes in the arguments like split-pred?
-;   #:keep-where #:split-map, and uses those to create the function
-;   that splitter-function uses. This will make the resulting
-;   functionality of splitting easier to think about, especially as I
-;   extend the capabilities of the function, stating allowing the user
-;   to do something like directly supply the function
-;   splitter-function wants, allowing them the greatest control over
-;   the splitting method.
-;(define (splitter-func lst loop-body finally)
-  ;(define (iter current-split splits remaining)
-    ;(cond
-      ;[(null? remaining) (finally current-split splits)]
-      ;[else (call-with-values 
-              ;iter 
-              ;(loop-body current-split splits remaining))]))
-  ;(iter null null lst))
-;
-;(define (split-where lst [split-pred? #f]
-                     ;#:keep-where  [keep-pred? #f]
-                     ;#:split-map  [split-cun #f]
-                     ;#:action [loop-body #f]
-                     ;#:finally [finally #f])
-  ;(cond 
-    ;[(and loop-body finally) (splitter-func lst loop-body finally)]
-    ;[(not split-pred?) 
-     ;(error "Must provide either both #:action and #:finally or split-pred?")]
-    ;[else 
-      ;(let
-        ;([loop-body
-           ;(λ (current-split splits remaining)
-              ;(match-let
-                ;[((cons elem tail) remaining)]
-                ;(if (split-pred? elem current-split tail)
-                  ;(let* 
-                    ;[(decision (keep-pred? elem current-split
-                                           ;tail))
-                     ;(new-current-split
-                       ;(case decision
-                         ;[(next) (list elem)]
-                         ;[else null]))
-                     ;(final-current-split-contents
-                       ;(reverse
-                         ;(case decision
-                           ;[(current) (cons elem current-split)]
-                           ;[else current-split])))
-                     ;(processed-current-split
-                       ;(cond
-                         ;[(null? final-current-split-contents)
-                          ;final-current-split-contents]
-                         ;[split-func
-                           ;(split-func final-current-split-contents)]
-                         ;[else final-current-split-contents]))
-                     ;(new-splits
-                       ;(begin 
-                         ;(report decision)
-                         ;(if (eq? decision 'separate)
-                           ;(report (list elem processed-current-split))
-                           ;(void))
-                         ;(report 
-                           ;(case decision
-                             ;[(separate #t)
-                              ;(if (null? processed-current-split)
-                                ;(cons elem splits)
-                                ;(append (list elem processed-current-split)
-                                        ;splits))]
-                             ;[else
-                               ;(if (null? processed-current-split)
-                                 ;splits
-                                 ;(cons processed-current-split splits))]))))]
-                    ;(values new-current-split
-                            ;new-splits
-                            ;tail))
-                  ;(values (cons elem current-split)
-                          ;splits
-                          ;tail))))]
-         ;[finally
-           ;(λ (current-split splits)
-              ;(cond
-                ;[(null? current-split) splits]
-                ;[split-func (cons (split-func (reverse current-split))
-                                  ;splits)]
-                ;[else (cons (reverse current-split) splits)])
 
 (define (split-where lst split-pred? 
           #:keep-where [keep-pred? (λ _ #f)]
