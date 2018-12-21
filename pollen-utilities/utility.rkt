@@ -373,25 +373,25 @@
           (values (cons element current-split)
                   splits
                   tail)
-          (begin
-            (define next-split
-              (if (eq? decision 'next)
-                (list element)
-                null))
-            (define processed-current-split
-              (if (eq? decision 'current)
-                (split-func (cons element current-split))
-                (split-func current-split)))
-            (define new-splits
-              (match (list decision (null? processed-current-split))
-                [(list 'separate #t)
-                 (cons elem splits)]
-                [(list 'separate #f)
-                 (append (list elem processed-current-split)
-                         splits)]
-                [(list (not 'separate) #t) splits]
-                [(list (not 'separate) #f) 
-                 (cons processed-current-split splits)]))
+          (let*
+            ((next-split
+               (if (eq? decision 'next)
+                 (list element)
+                 null))
+             (processed-current-split
+               (if (eq? decision 'current)
+                 (split-func (cons element current-split))
+                 (split-func current-split)))
+             (new-splits
+               (match (list decision (null? processed-current-split))
+                 [(list 'separate #t)
+                  (cons element splits)]
+                 [(list 'separate #f)
+                  (append (list element processed-current-split)
+                          splits)]
+                 [(list (not 'separate) #t) splits]
+                 [(list (not 'separate) #f) 
+                  (cons processed-current-split splits)])))
             (values next-split new-splits tail)))
         (values (cons element current-split)
                 splits
