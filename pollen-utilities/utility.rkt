@@ -1,5 +1,6 @@
 #lang racket
 (require txexpr pollen/decode)
+(module+ test (require rackunit))
 
 ; Pollen Helpers: {{{ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -226,7 +227,6 @@
 (provide (all-defined-out))
 
 (module+ test
-  (require rackunit)
   (define (zip l1 l2)
     (cond ((or (null? l1) (null? l2)) null)
           (else (cons (list (car l1) (car l2))
@@ -286,23 +286,27 @@
   (test-case
     "split-where"
     (define case1 '(0 1 2 s 3 4 5 s s 6 7 8 9 10 s))
+    (define case2 '(10 8 9 7 6 5 4 3 2 1))
+    (define case3 '(10 8 9 s 7 6 s 5 s s 4 s 3 2 1 s))
+    (define case4 '(s 10 8 9 s 7 6 s 5 s s 4 s 3 2 1 s))
+    (define case5 '(s))
+    (define (split a-case) 
+      (split-where a-case (λ (e . _) (eq? 's e))))
     (check-equal?
-      (call-with-values
-        (for/fold 
-          ([splits null] [current-split null])
-          ([e case1])
-          (cond 
-            ((eq? e 's) 
-             (if (null? current-split)
-               (values splits null)
-               (values (append splits (list current-split)) null)))
-            (else 
-              (values splits (append current-split (list e))))))
-        (λ (x . _) x))
-      (split-where case1 (λ (e . _) (eq? 's e)))))
-
-  )
-
+      '((0 1 2) (3 4 5) (6 7 8 9 10))
+      (split case1))
+    (check-equal?
+      (list case2)
+      (split case2))
+    (check-equal?
+      '((10 8 9) (7 6) (5) (4) (3 2 1))
+      (split case3))
+    (check-equal?
+      (split case3)
+      (split case4))
+    (check-equal?
+      '()
+      (split case5))))
 
 ; list? procedure? 
 ;   #:keep-where procedure? 
