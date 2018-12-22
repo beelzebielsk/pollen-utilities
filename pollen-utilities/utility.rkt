@@ -1,6 +1,7 @@
 #lang racket
 (require txexpr pollen/decode)
 (module+ test (require rackunit))
+(provide (all-defined-out))
 
 ; Pollen Helpers: {{{ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -45,7 +46,7 @@
       (cons '@ 
             (map (lambda (e) (if (txexpr-element? e) e (~a e)))
                  lst)))
-    (list-splice args)))
+    (list-splice (list* args))))
 
 (define-syntax let-splice
   (lambda (stx)
@@ -224,7 +225,9 @@
 (define (list-strip lst pred?)
   (dropf-right (dropf lst pred?) pred?))
 
-(provide (all-defined-out))
+(define (attr-list-ref lst key [failure-result #f])
+  (let ([pair (findf (λ (p) (eq? (first p) key)) lst)])
+    (if pair (second pair) failure-result)))
 
 (module+ test
   (define (zip l1 l2)

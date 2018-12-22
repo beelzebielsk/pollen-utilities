@@ -18,8 +18,21 @@
       (if result
         (cdr result)
         #f)))
+  ; NOTE: I goofed, here. The apply-tags function isn't directly
+  ; compatible with tag functions that would work with a document.
+  ; When a tag function is used in a document, all of the children of
+  ; the txexpr are given as parameters to the function (this goes for
+  ; those def'ed using define-tag-function, too. 
+  ; The function used here get a single parameter: the whole txexpr.
+  ; To adjust a normal document-level tag function to a function that
+  ; would recieve the whole txexpr, do something like:
+  ;     (lambda (tx) 
+  ;         (apply tag-func (get-attrs tx) (get-elements tx)))
   (define (apply-tag-func tag-name texpr)
     ((get-tag-func tag-name) texpr))
+  ;(define (apply-tag-func tag-name texpr)
+    ;(apply (get-tag-func tag-name) 
+           ;(rest txexpr)))
   (decode expr
           #:txexpr-proc
           (lambda (t)

@@ -5,6 +5,7 @@
 (provide macro macro-1 environment group define-math-tag ->ltx $ $$
          ensure-math)
 (provide split-bullets store-args)
+(module+ test (require rackunit))
 
 ; any/c -> any/c
 ; Returns a truthy value is the argument is considered to be
@@ -16,6 +17,12 @@
 ; a newline.
 (define (newline? val)
   (and (whitespace? val) (string-contains? val "\n")))
+; (or/c txexpr? any?) -> (or/c txexpr? any?)
+; If it gets a txexpr, then checks for math tags and performs the
+; flattening, making sure that no math tag is nested within another
+; math tag, by bringing the children of a nested math tag out of the
+; math tag (and getting rid of it). However, it does not get rid of
+; the containing 'math tag.
 (define (math-flatten xexpr)
   (cond [(is-tag? xexpr 'math)
          (flatten-tags xexpr #:only '(ensure-math))]
@@ -25,17 +32,77 @@
         [(is-tag? xexpr 'ensure-math)
          (math-flatten (txexpr 'math null (get-elements xexpr)))]
         [(txexpr? xexpr)
+         ; It's not necessary to apply math-flatten recursively here,
+         ; as other parts of math-flatten will hanlde that already.
          (map math-flatten xexpr)]
         [else xexpr]))
+
+(module+ test
+  (test-case
+    "math-flatten"
+    (define cases `(
+        (root (math "a"))
+        (root (math "a" "bc" (ensure-math "d")))
+        (root (math "a" "bc" 
+                    (ensure-math "d" "e"
+                                 (ensure-math "f"))))
+        (root (math "a" "bc" 
+                    (ensure-math "d" "e")
+                    "f"
+                    (other-element 
+                      (ensure-math "g"))))
+        ))
+    (define expected-results `(
+        (root (math "a"))
+        (root (math "a" "bc" "d"))
+        (root (math "a" "bc" "d" "e" "f"))
+        (root (math "a" "bc" "d" "e" "f"
+                    (other-element "g")))
+
+        ))
+    (for ([the-case cases]
+          [result expected-results])
+      (check-equal? (math-flatten the-case) result))))
 
 (define (group . _)
   (list-splice `("{" ,@_ "}")))
 (define math (default-tag-function 'math))
 (define ensure-math (default-tag-function 'ensure-math))
+; NOTE: To make use of the $ and $$ tags, you must provide them
+; explicitly in your pollen.rkt. They are convenience aliases for the
+; math tag, but core->ltx expects 'math tags explicitly, not '$ or
+; '$$.
 (define-tag-function ($ _ text)
+  (report text)
   (apply math text))
 (define-tag-function ($$ _ text)
   (apply math #:display "" text))
+
+(module+ test
+  (test-case
+    "math-tags"
+    (define cases `(
+        (root ($ "a"))
+        (root ($$ "a"))
+        (root ($ "a") ($ "b"))
+        (root ($ "a") ($$ "b"))
+        (root ($ "a") ($$ "b") (math "c"))
+        ))
+    (define expected-results `(
+        (root (math "a"))
+        (root (math ((display "")) "a"))
+        (root (math "a") (math "b"))
+        (root (math "a") (math ((display "")) "b"))
+        (root (math "a") (math ((display "")) "b") (math "c"))
+        ))
+    (for ([the-case cases]
+          [result expected-results])
+      (check-equal? 
+        (apply-tags 
+          the-case
+          (cons '$ (λ (tx) (apply $ (get-attrs tx) (get-elements tx))))
+          (cons '$$ (λ (tx) (apply $$ (get-attrs tx) (get-elements tx)))))
+        result))))
 
 (define-syntax-rule (define-math-tag (name attrs elems) body ...)
   (define-tag-function 
@@ -107,7 +174,7 @@
 ; core? ... -> txexpr?
 ; Takes a series of core? and encases them within 'symbol tag.
 ; Signifies that the contents should all be considered a single
-; symbol (character). Example use: (tex-symbol (macro 'pi)). That
+; symbol (character). Example use: (tex-symbol (macro-1 'pi)). That
 ; macro will become the greek lowercase letter pi.
 ; TODO: Handle non-math-mode symbols. I THINK that they exist, but I'm
 ; not sure.
@@ -142,6 +209,31 @@
              ,(txexpr 'before-args null before)
              ,(txexpr 'after-args null after)
              ,(txexpr 'body null body))))
+
+(module+ test
+  (test-case
+    "macros and environments"
+    (define cases `(
+        ,(macro 'testmacro '("a" "b" "c"))
+        ,(macro 'testmacro 
+                '("arg1-1" " " "arg1-2")
+                '("arg2-1" " " "arg2-2" " " "arg2-3"))
+        ))
+    (define expected-results `(
+        (macro ((start "{") (end "}") (name "testmacro"))
+               (arg "a" "b" "c"))
+        (macro ((start "{") (end "}") (name "testmacro"))
+               (arg "arg1-1" " " "arg1-2")
+               (arg "arg2-1" " " "arg2-2" " " "arg2-3"))
+        ))
+    (for ([the-case cases]
+          [result expected-results])
+      (check-equal? 
+        (apply-tags 
+          the-case
+          (cons '$ (λ (tx) (apply $ (get-attrs tx) (get-elements tx))))
+          (cons '$$ (λ (tx) (apply $$ (get-attrs tx) (get-elements tx)))))
+          result))))
 
 
 ; txexpr-elements? symbol? -> (listof (or/c txexpr? string?))
@@ -411,7 +503,8 @@
     (let* ([name (format "\\~a" (attr-ref macro-tag 'name))]
            [args 
              (map (λ (e) (string-join (get-elements e) "")) 
-                  (report (get-elements macro-tag)))]
+                  ;(report (get-elements macro-tag)))]
+                  (get-elements macro-tag))]
            [formatted-args (if (null? args)
                              '("{}")
                              (macro-args args))])
@@ -459,6 +552,22 @@
 ; txexpr-elements? -> (listof string?)
 (define (->ltx elements)
   (core->ltx (convenience->core elements)))
+
+(module+ test
+  (test-case
+    "core->ltx"
+    (define cases `(
+        (root (math "a"))
+        (root (macro ((start "{") (end "}") (name "testmacro"))
+                     (arg "a")))
+        ))
+    (define expected-results `(
+        (root "$a$")
+        (root "\\testmacro{a}")
+        ))
+    (for ([the-case cases]
+          [result expected-results])
+      (check-equal? (core->ltx the-case) result))))
 
 ; In reference to a comment in decode.rkt line 59 in the pollen
 ; repository:
