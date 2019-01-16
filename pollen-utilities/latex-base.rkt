@@ -3,7 +3,7 @@
   "utility.rkt" "utility/manual-traverse.rkt"
   txexpr pollen/decode pollen/core pollen/tag)
 (provide macro macro-1 environment group define-math-tag ->ltx $ $$
-         ensure-math)
+         ensure-math combine-math-things math-thing?)
 (provide split-bullets store-args)
 (module+ test (require rackunit))
 
@@ -73,7 +73,6 @@
 ; math tag, but core->ltx expects 'math tags explicitly, not '$ or
 ; '$$.
 (define-tag-function ($ _ text)
-  (report text)
   (apply math text))
 (define-tag-function ($$ _ text)
   (apply math #:display "" text))
@@ -176,12 +175,217 @@
 ; Signifies that the contents should all be considered a single
 ; symbol (character). Example use: (tex-symbol (macro-1 'pi)). That
 ; macro will become the greek lowercase letter pi.
-; TODO: Handle non-math-mode symbols. I THINK that they exist, but I'm
-; not sure.
-(define (tex-symbol . args)
+(define (tex-symbol #:type [type #f] . args )
   (txexpr 'symbol
-          `((requires-math "true"))
+          (if type `((type ,type)) null)
           args))
+
+; list? lambda? -> (or/c bool? nonnegative?)
+; If an element satisfying the predicate exists within lst, then
+; index-where-last returns the position of the last such element.
+; Otherwise, index-where-last returns false.
+(define (index-where-last lst pred)
+  (call/cc 
+    (λ (stop)
+       (let loop ([remaining lst] [pos 0] [last-seen #f])
+         (cond
+           ((null? remaining) (stop last-seen))
+           ((pred (first remaining))
+            (loop (rest remaining) (add1 pos) pos))
+           (else (loop (rest remaining) (add1 pos) last-seen)))))))
+
+; any/c -> bool?
+; True if the argument is considered a math thing, a tag whose
+; contents ought to be rendered in latex's math mode.
+(define (math-thing? value)
+  (cond
+    ((txexpr? value)
+     (or (is-tag? value 'math 'ensure-math)
+         (and (is-tag? value 'symbol)
+              (eq? (attr-ref value 'type) "math"))))
+    (else #f)))
+
+(define (combination math-stuff)
+  (let ((start (first math-stuff))
+        (end (last math-stuff)))
+    (cond
+      ((and (is-tag? start 'math)
+            (is-tag? end 'math))
+       math-stuff)
+      ((is-tag? start 'math)
+       (list 
+         (apply math (append (get-elements start) (rest math-stuff)))))
+      ((is-tag? end 'math)
+       (list
+         (apply math (append (drop-right math-stuff 1) 
+                             (get-elements end)))))
+      (else (list (apply math math-stuff))))))
+
+; txexpr-elements? -> txexpr-elements?
+; Takes txexpr-elements? and looks for math-thing? elements to
+; combine. The returned result will contain all of the same elements
+; in the same order, except that math-thing? elements will be
+; combined.
+; - any two math-thing? separated by zero or more elements of
+;   whitespace? will be combined as children of a 'math tag.
+; - if one of the two math-things? is a 'math tag, then the other
+;   math-thing? will be added into the 'math tag as a child. If the
+;   other 'math thing comes before the 'math tag, then it will be
+;   prepended to the children of the 'math tag; otherwise it will get
+;   appended to the children of the 'math tag.
+; - two 'math tags are not combined.
+(define (combine-math-things elements)
+  ; Here's a weird thought: let's make a function that acts like a
+  ; state machine by making the states functions. The state-functions
+  ; will return the next state to transition to.
+  ;
+  ; a state without a matching state function is a state with no
+  ; transitions, ie a terminal state.
+  (define states
+    (list
+      (cons 'searching
+            (lambda (token)
+              (if (math-thing? token) 'found-math-thing 'searching)))
+      (cons 'found-math-thing
+            (lambda (token)
+              (cond
+                ((whitespace? token) 'found-math-thing)
+                ((math-thing? token) 'found-combine-candidate)
+                (else 'searching))))))
+  ; scanned contains the element which caused machine to enter an
+  ; #:until state or leave an #:until-not state.
+  ; the ith entry of history is the state the machine was in when it
+  ; examined token i. Thus, the initial state is (list-ref 0 history),
+  ; the state of the machine prior to scanning the 1st token. Thus
+  ; there is one more state in the history than there are scanned
+  ; tokens.
+  (define (run-machine #:until [until-states #f]
+                       #:until-not [until-not-states #f]
+                       states
+                       tokens
+                       current-state)
+    (define (get-state-func name)
+      (cdr (assoc name states)))
+    (define (helper scanned remaining history current-state)
+      (cond 
+        ((or (null? remaining)
+             (and until-states
+                  (member current-state until-states))
+             (and until-not-states
+                  (member current-state until-not-states)))
+         (values scanned remaining history current-state))
+        (else
+          (let ((next-state 
+                  ((get-state-func current-state) (first remaining))))
+          (helper (append scanned (list (first remaining)))
+                  (rest remaining)
+                  (cons next-state history)
+                  next-state)))))
+    (let-values
+      (((scanned remaining history last-state)
+        (helper null tokens (list current-state) current-state)))
+      (values scanned remaining (reverse history) last-state)))
+  ; How to combine two math-things: math-stuff is a list of
+  ; txexpr-elements? such that the first and last element are
+  ; math-thing? and if there are other members in between them, they
+  ; are whitespace.
+  (define (combine elements)
+    (cond 
+      ((null? elements) elements)
+      (else
+        (define-values
+          (scanned-elements the-rest history state-after-searching)
+          (run-machine #:until (list 'found-combine-candidate)
+                       states
+                       elements
+                       'searching))
+        (cond
+          ((eq? state-after-searching 'found-combine-candidate)
+           (define-values
+             (prefix math-stuff)
+             (let ((last-non-math 
+                     (index-where-last history (curry eq? 'searching))))
+               (split-at scanned-elements last-non-math)))
+           ; The last math element should be up for combination with
+           ; the next math element, if there is one. This way
+           ; something like
+           ;    (math a) (math b) (math c) (math d)
+           ; becomes
+           ;    (math a b c d)
+           ; instead of
+           ;    (math a b) (math c d)
+           (let-values
+             (((all-but-last the-last)
+               (split-at-right (combination math-stuff) 1)))
+             (append prefix
+                     all-but-last
+                     (combine (cons (first the-last) the-rest)))))
+           (else elements)))))
+  (combine elements))
+
+(module+ test
+  (test-case
+    "combine-math-things"
+    (define tests
+      `(()
+        (a)
+        (a b)
+        ((math a))
+        ((math a) (math b))
+        ((math a) (ensure-math b))
+        ((ensure-math a) (ensure-math b))
+        ((math a) (ensure-math b) (ensure-math c))
+        ((math a) (ensure-math b) ,(tex-symbol #:type "math" "symbol"))
+        ((math a) " " (ensure-math b))
+        ((math a) " " (ensure-math b) " " " " (ensure-math c))
+        ((math a) " " (math b) (ensure-math c) (math d) e (ensure-math f) 
+                  ,(tex-symbol #:type "math" "g"))
+        ))
+    (define expected-results
+      `(()
+        (a)
+        (a b)
+        ((math a))
+        ((math a) (math b))
+        ((math a (ensure-math b)))
+        ((math (ensure-math a) (ensure-math b)))
+        ((math a (ensure-math b) (ensure-math c)))
+        ((math a (ensure-math b) ,(tex-symbol #:type "math" "symbol")))
+        ((math a " " (ensure-math b)))
+        ((math a " " (ensure-math b) " " " " (ensure-math c)))
+        ((math a) " " (math b (ensure-math c)) (math d) e 
+                  (math (ensure-math f) 
+                        ,(tex-symbol #:type "math" "g")))
+        ))
+    (for ([test-case tests]
+          [result expected-results])
+      (check-equal? (combine-math-things test-case) result 
+                    "combine-math-things failed"))))
+
+(module+ test
+  (test-case
+    "combine-math-things"
+    (define tests
+      `((root a (b (math c) (math d)))
+        (root a (b (ensure-math c) (ensure-math d)))
+        (root (a (ensure-math b) (symbol ((type "math")) c)
+                 (ensure-math d))
+              (f (symbol ((type "math")) g) (symbol ((type "math")) h)))
+        ))
+    (define expected-results
+      `((root a (b (math c) (math d)))
+        (root a (b (math (ensure-math c) (ensure-math d))))
+        (root (a (math (ensure-math b) (symbol ((type "math")) c)
+                       (ensure-math d)))
+              (f (math (symbol ((type "math")) g) 
+                       (symbol ((type "math")) h))))
+        ))
+    (for ([test-case tests]
+          [result expected-results])
+      (check-equal? (decode test-case 
+                            #:txexpr-elements-proc combine-math-things)
+                    result 
+                    "combine-math-things failed"))))
 
 ; (or/c string? symbol?) (listof core?)
 ;   #:before-args (listof core?)
@@ -406,10 +610,12 @@
   ;(txexpr 'row null (split-list-at-tag-or-newline elems)))
 
 
-; txexpr-elements? -> txexpr?
-; This takes one of the convenience layer tags and transforms it into
-; core-level tags. All user-defined tags should already be strings by
-; this point in time.
+; (or/c txexpr? txexpr-elements?) -> (or/c txexpr? txexpr-elements?)
+; This takes a txexpr? or txexpr-elements? which should contain only
+; core? and convenience tags. It will return a txexpr? or
+; txexpr-elements? which contains only core? tags. A txexpr? is
+; returned if the argument was a txexpr?. Otherwise txexpr-elements?
+; are returned.
 (define (convenience->core elements)
   (define (user-lists->list-tags txpr)
     (apply-tags 
@@ -422,7 +628,9 @@
               (level-lists (apply ol (get-elements tx)) "ordered")))
       (cons 'eql
             (lambda (tx) 
-              (apply eql (get-elements tx))))))
+              (apply eql 
+                     (flatten-tags (get-elements tx)
+                                   #:only '(math ensure-math)))))))
   (define (remove-bullet item-tag bullet-pattern)
     (let* ([1st (first (get-elements item-tag))]
            [no-bullet (regexp-replace bullet-pattern 1st "")])
@@ -514,7 +722,8 @@
   (define (to-each-element tx)
     (@-flatten
       (apply-tags
-        (math-flatten tx)
+        (math-flatten 
+          (decode #:txexpr-elements-proc combine-math-things tx))
         (cons 'macro macro->string)
         (cons
           'environment
@@ -546,7 +755,9 @@
                                ,@(get-elements tx) 
                                ,surround) "")))))))
   (if (txexpr? elements)
+    ; Should return txexpr? unless the root tag is @.
     (to-each-element elements)
+    ; Should return txexpr-elements?.
     (append-map to-each-element elements)))
 
 ; txexpr-elements? -> (listof string?)
@@ -560,10 +771,12 @@
         (root (math "a"))
         (root (macro ((start "{") (end "}") (name "testmacro"))
                      (arg "a")))
+        (root (math (ensure-math "a")) " " (ensure-math "b"))
         ))
     (define expected-results `(
         (root "$a$")
         (root "\\testmacro{a}")
+        (root "$a b$")
         ))
     (for ([the-case cases]
           [result expected-results])
@@ -609,9 +822,48 @@
 ;         automatically, or merged with adjacent math elements.
 ;   - Merge adjacent math elements and 'symbol tags that require
 ;     math mode.
+;       - This behavior may be undesirable at times. So only merge
+;         'ensure-math with other 'math tags ('ensure-math or 'math). Do
+;         not merge 'math with 'math, as the intent of the 'math tag is
+;         to be explictly used by the user, and otherwise 'ensure-math
+;         is used to force math mode just in case.
 ; - tables.
 ; - Escaping special characters
 ;   - Escaping & outside of align and tables.
 ;   - Escaping % almost always (except in something like lstlisting
 ;     environments or lstlinline commands).
 ;   - Escaping lone backslashes.
+;   - This is probably done easiest by escaping all special characters
+;     early on, leaving special meaning characters to be created by
+;     tags and macros and such.
+; - Make the lists more flexible. Right now, a lot of the list logic
+;   is split up amongst the logic of splitting up a list of items, and
+;   different tag functions. Separate out the list stuff and make an
+;   interface to it where you can decide how the raw txexpr-elements?
+;   become list items and sublists, and what to do with each item in
+;   the end, as well as what environment to use and such. This would
+;   make it easier to create new lists on the fly, which would be
+;   good.
+;     - Try to make the current lists you have with some sort of
+;       interface. Don't actually program it. It's wishful thinking
+;       for now, just write some stuff out that looks like it ought to
+;       create the same list functionality. Important things that can
+;       change:
+;         - How do you separate the raw stuff into items?
+;         - How do you determine if an item should be in the same list
+;           or go into a new list?
+;         - Once the processing of items is done, how will you
+;           transform the items into their final forms in the
+;           document?
+;         - What do you do with the list items as a whole once they've
+;           been transformed?
+;     - Make sure that all stuff related to "bullets" in a list are
+;       contained in one place. Once a bullet is detected, it should
+;       also be removed. The bullet should contain all list
+;       information: the marker for a bullet and indentation level.
+;       That should then be placed on an item in a uniform way that
+;       has notthing to do with what the original list item looked
+;       like.
+; Make something where you can decide
+;   if and how the list of items gets "levelled out" into sublists.
+;   Give the 
