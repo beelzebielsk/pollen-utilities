@@ -8,31 +8,48 @@
 ; A macro which will take an expression, print some information about
 ; it, and then replace itself with the original expression. For
 ; debugging purposes.
-(define-syntax-rule (report EXPR)
-  (let 
-    [(result EXPR)
-     (expr-length 25)
-     (expr-string (~v (syntax->datum #'EXPR)))]
-    (displayln
-      (string-append
-        ; If the syntax object is from some other module...
-        (if (syntax-source-module #'EXPR)
-          (format "[From ~a]" 
-                  ; Report only the filename of the module.
-                  (last
-                    (explode-path
-                      (resolved-module-path-name
-                        (module-path-index-resolve 
-                          (syntax-source-module #'EXPR))))))
-          "")
-        (format "(line ~a, col ~a): Expression ~a results in ~v"
-                (syntax-line #'EXPR)
-                (syntax-column #'EXPR)
-                (if (> (string-length expr-string) expr-length)
-                  (string-append (substring expr-string 0 expr-length) "...")
-                  expr-string)
-                result)))
-    result))
+(define-syntax (report stx)
+  (syntax-case stx ()
+    [(report EXPR REPORT-NAME)
+     #'(let*
+         [(result EXPR)
+          (expr-length 25)
+          (expr-string (~v (syntax->datum #'EXPR)))
+          (abbrev-expr
+            (if (> (string-length expr-string) expr-length)
+              (string-append (substring expr-string 0 expr-length) "...")
+              expr-string))
+          (line (syntax-line #'EXPR))
+          (col (syntax-column #'EXPR))
+          (report-name REPORT-NAME)
+          (source-name 
+            (if (syntax-source-module #'EXPR)
+              (last
+                (explode-path
+                  (resolved-module-path-name
+                    (module-path-index-resolve 
+                      (syntax-source-module #'EXPR)))))
+              #f))
+          ]
+         (displayln
+           (string-append
+             ; If the syntax object is from some other module...
+             (cond
+               [(and source-name report-name)
+                (format "[From ~a, ~a]" source-name report-name)]
+               [source-name
+                 (format "[From ~a]" source-name)]
+               [report-name
+                 (format "[From (n/a src mod) ~a]" report-name)]
+               [else ""])
+             (format "(line ~a, col ~a): Expression ~a results in ~v"
+                     line
+                     col
+                     abbrev-expr
+                     result)
+             ))
+         result)]
+    [(report EXPR) #'(report EXPR #f)]))
 
 ; Makes it so that a list of elements appears in the pollen document
 ; as if they were not enclosed in a list. Like when/splice, but always
@@ -325,8 +342,8 @@
 ; - The #:keep-where procedure determines where an element that causes
 ;   a split will go. If the procedure returns:
 ;       - 'current: The element which caused the split will be placed
-;         in the sublist that was being built when the element was
-;         encountered.
+;         at the end of the sublist that was being built when the
+;         element was encountered.
 ;       - 'next: The element which caused the split will be placed
 ;         at the start of the next sublist that will be built up.
 ;       - 'separate: The element will be placed on its own. It won't
@@ -334,7 +351,7 @@
 ;         the current sublist being built, and the next sublist that
 ;         will be built.
 ;       - 'ignore: The element will not be placed in any split, nor on
-;         its own.
+;         its own. It just gets ignored.
 ; - The split-map option is supplied because the output of split-where
 ;   may not be a list of splits if the #:keep-where function returns
 ;   'separate. In this case, the split element is placed on it's own
