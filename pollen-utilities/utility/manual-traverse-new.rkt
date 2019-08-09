@@ -107,8 +107,7 @@
           t))
       (get-elements expr))))
 
-(define (apply-tag-funcs-to-elements tag-list elements)
+(define (apply-tags-to-elements elements . tag-list)
   (get-elements 
-    (apply-tag-funcs tag-list 
-                     (txexpr (gensym "temp-tag") null elements))))
+    (apply apply-tag-funcs (txexpr (gensym "temp-tag") null elements) tag-list)))
 

@@ -2,6 +2,7 @@
 (require "../utility.rkt"
          txexpr
          pollen/decode)
+(provide listify)
 (module+ test (require rackunit))
 
 ; any/c -> any/c
