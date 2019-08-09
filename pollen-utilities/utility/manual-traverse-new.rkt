@@ -4,30 +4,25 @@
 (module+ test (require rackunit))
 
 (define (tag-list->hash tag-list)
-  (for/hash [(t tag-list)]
-    (values (car t) (cdr t))))
+  (apply hash tag-list))
 
-; tag-list is a list of tag functions, which are all of the form
-; (cons symbol? procedure)
-; where the symbol is the name of the tag, and the procedure is the
+; tag-list is a list like (list symbol? procedure? symbol? procedure?  ...)
+; where the symbol is the name of a tag, and the procedure is the
 ; function corresponding to that tag.
+; Each procedure? should have the same signature as txexpr-proc
+; procedures from decode: (txexpr? -> (or xexpr? (listof xexpr?)))
 ; tag-list txexpr? -> txexpr?
-(define (apply-tag-funcs tag-list expr)
-  (define tags (tag-list->hash tag-list))
+(define (apply-tag-funcs expr . tag-list)
+  (define tags (apply hash tag-list))
   (define (tag-to-apply? tag-name)
     (hash-has-key? tags tag-name))
-  ; NOTE: I goofed, here. The apply-tags function isn't directly
-  ; compatible with tag functions that would work with a document.
-  ; When a tag function is used in a document, all of the children of
-  ; the txexpr are given as parameters to the function (this goes for
-  ; those def'ed using define-tag-function, too). 
-  ; The functions used here get a single parameter: the whole txexpr.
-  ; To adjust a normal document-level tag function to a function that
-  ; would recieve the whole txexpr, do something like:
-  ;     (lambda (tx) 
-  ;         (apply tag-func (get-attrs tx) (get-elements tx)))
-  (define (apply-tag-func tag-name texpr)
-    ((hash-ref tags tag-name) texpr))
+  (define (apply-tag-func tag-name txpr)
+    ;(apply (hash-ref tags tag-name) (get-attrs txpr) (get-elements txpr)))
+    ; One of these is right. I think it is this one. I want to feed
+    ; the attributes and keyword arguments and elements to the tag
+    ; function.
+    ;(write (format "Applying ~v to ~v" tag-name txpr))
+    (apply (hash-ref tags tag-name) (get-elements txpr)))
   (decode expr
           #:txexpr-proc
           (lambda (t)
@@ -71,28 +66,25 @@
       ))
     (define tag-list 
       (list
-        (cons '$
-              (λ (tx) `("$" ,@(get-elements tx) "$")))
-        (cons 'forget-1st-element
-              (λ (tx)
-                 (define elems (get-elements tx))
-                 (rest elems)))
-        (cons 'forget-2nd-element
-              (λ (tx)
-                 (define elems (get-elements tx))
-                 `( ,(first elems)
-                    ,@(drop elems 2))))
-        (cons 'to-flatten
-            (λ (tx)
-               (txexpr 'to-flatten
-                       null
-                       (decode-elements
-                         (get-elements tx)
-                         #:txexpr-proc
-                         (decode-flattener #:only '(to-flatten))))))))
+        '$
+        (λ elements `("$" ,@elements "$"))
+        'forget-1st-element
+        (λ elements (rest elements))
+        'forget-2nd-element
+        (λ elements
+           `( ,(first elements)
+              ,@(drop elements 2)))
+        'to-flatten
+        (λ elements
+           (txexpr 'to-flatten
+                   null
+                   (decode-elements
+                     elements
+                     #:txexpr-proc
+                     (decode-flattener #:only '(to-flatten)))))))
     (for ([the-case tests]
           [result expected-results])
-      (check-equal? (apply-tag-funcs tag-list the-case)
+      (check-equal? (apply apply-tag-funcs the-case tag-list)
                     result))))
 
 (define (apply-tags-to-children expr . tag-list)
@@ -119,15 +111,4 @@
   (get-elements 
     (apply-tag-funcs tag-list 
                      (txexpr (gensym "temp-tag") null elements))))
-
-; These two functions are pretty close to my "with-syntax" form.
-; They're convenience forms of the above functions. I find the syntax
-; to be nicer if the tag-list is implicitly formed as a collection of
-; the cons pairs which are parameters to the function.
-
-(define (apply-tags expr . tag-list)
-  (apply-tag-funcs tag-list expr))
-
-(define (apply-tags-to-elements elements . tag-list)
-  (apply-tag-funcs-to-elements tag-list elements))
 
