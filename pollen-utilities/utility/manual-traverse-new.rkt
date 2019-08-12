@@ -16,18 +16,18 @@
   (define tags (apply hash tag-list))
   (define (tag-to-apply? tag-name)
     (hash-has-key? tags tag-name))
-  (define (apply-tag-func tag-name txpr)
+  (define (apply-tag-func txpr)
     ;(apply (hash-ref tags tag-name) (get-attrs txpr) (get-elements txpr)))
     ; One of these is right. I think it is this one. I want to feed
     ; the attributes and keyword arguments and elements to the tag
     ; function.
     ;(write (format "Applying ~v to ~v" tag-name txpr))
-    (apply (hash-ref tags tag-name) (get-elements txpr)))
+    (apply (hash-ref tags (get-tag txpr)) (get-elements txpr)))
   (decode expr
           #:txexpr-proc
           (lambda (t)
             (if (and (txexpr? t) (tag-to-apply? (get-tag t)))
-              (apply-tag-func (get-tag t) t)
+              (apply-tag-func  t)
               t))))
 
 (module+ test
@@ -91,8 +91,8 @@
   (define tags (tag-list->hash tag-list))
   (define (tag-to-apply? tag-name)
     (hash-has-key? tags tag-name))
-  (define (apply-tag-func tag-name texpr)
-    ((hash-ref tags tag-name) texpr))
+  (define (apply-tag-func txpr)
+    (apply (hash-ref tags (get-tag txpr)) (get-elements txpr)))
   (txexpr
     (get-tag expr)
     (get-attrs expr)
@@ -103,7 +103,7 @@
     (map
       (lambda (t)
         (if (and (txexpr? t) (tag-to-apply? (get-tag t)))
-          (apply-tag-func (get-tag t) t)
+          (apply-tag-func t)
           t))
       (get-elements expr))))
 
