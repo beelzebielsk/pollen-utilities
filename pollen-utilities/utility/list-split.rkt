@@ -25,8 +25,8 @@
 ;   into individual txexpr. These txexpr will be 'list-tag.
 ; - Detects the bullets indentation levels and places that indentation
 ;   level as an attribute on each 'list-tag.
-; Takes a regular expression representing
-; the prefix of a string that represents an element of a list.
+; Takes a regular expression representing the prefix of a string that
+; represents an element of a list.
 ; The result is a list of txexpr? with the name given by 'list-tag.
 (define (prepare-list lst bullet-pattern)
   ; Keep looking through whitespace until you see a bullet. If you
@@ -76,9 +76,10 @@
          ; TODO: Preceeding newlines would become part of indentation
          ; level. That's not right.
          (define content-only 
-           (regexp-replace bullet-pattern 
-                           (first bullet-and-rst)
-                           ""))
+           (string-trim
+             (regexp-replace bullet-pattern 
+                             (first bullet-and-rst)
+                             "")))
          (define bullet 
            (string-join (append indent (list (first bullet-and-rst))) ""))
          (define level (get-list-level bullet))
@@ -207,19 +208,19 @@
   (test-case
     "one element and one level"
     (define the-case '(ul "- list text."))
-    (define result `(ul (i ((level "0")) " list text.")))
+    (define result `(ul (i ((level "0")) "list text.")))
     (check-equal? (listify (get-elements the-case) bullet? 'ul) result))
   (test-case
     "two elements and one level"
     (define the-case '(ul "- list text." "\n" "- more list text."))
-    (define result `(ul (i ((level "0")) " list text.")
-                        (i ((level "0")) " more list text.")))
+    (define result `(ul (i ((level "0")) "list text.")
+                        (i ((level "0")) "more list text.")))
     (check-equal? (listify (get-elements the-case) bullet? 'ul) result))
   (test-case
     "levels: one two"
     (define the-case '(ul "- list text." "\n" "    - more list text."))
-    (define result `(ul (i ((level "0")) " list text.")
-                        (ul (i ((level "1")) " more list text."))))
+    (define result `(ul (i ((level "0")) "list text.")
+                        (ul (i ((level "1")) "more list text."))))
     (check-equal? (listify (get-elements the-case) bullet? 'ul) result))
   (test-case
     "levels: one two two one"
@@ -230,10 +231,10 @@
                           "    - two:2 and text."
                           "\n" 
                           "- one:2 and text."))
-    (define result `(ul (i ((level "0"))  " one:1 and text.")
-                        (ul (i ((level "1")) " two:1 and text.")
-                            (i ((level "1")) " two:2 and text."))
-                        (i ((level "0"))  " one:2 and text.")))
+    (define result `(ul (i ((level "0"))  "one:1 and text.")
+                        (ul (i ((level "1")) "two:1 and text.")
+                            (i ((level "1")) "two:2 and text."))
+                        (i ((level "0"))  "one:2 and text.")))
     (check-equal? (listify (get-elements the-case) bullet? 'ul) result))
   (test-case
     "levels: one two three two one"
@@ -246,11 +247,11 @@
                           "    - two:2 and text."
                           "\n" 
                           "- one:2 and text."))
-    (define result `(ul (i ((level "0"))  " one:1 and text.")
-                        (ul (i ((level "1")) " two:1 and text.")
-                            (ul (i ((level "2")) " three:1 and text."))
-                            (i ((level "1")) " two:2 and text."))
-                        (i ((level "0"))  " one:2 and text.")))
+    (define result `(ul (i ((level "0"))  "one:1 and text.")
+                        (ul (i ((level "1")) "two:1 and text.")
+                            (ul (i ((level "2")) "three:1 and text."))
+                            (i ((level "1")) "two:2 and text."))
+                        (i ((level "0"))  "one:2 and text.")))
     (check-equal? (listify (get-elements the-case) bullet? 'ul) result))
   (test-case
     "levels: one two three one"
@@ -263,9 +264,56 @@
                           "        - three:1 and text."
                           "\n" 
                           "- one:2 and text."))
-    (define result `(ul (i ((level "0"))  " one:1 and text.")
-                        (ul (i ((level "1")) " two:1 and text.")
-                            (i ((level "1")) " two:2 and text.")
-                            (ul (i ((level "2")) " three:1 and text.")))
-                        (i ((level "0"))  " one:2 and text.")))
+    (define result `(ul (i ((level "0"))  "one:1 and text.")
+                        (ul (i ((level "1")) "two:1 and text.")
+                            (i ((level "1")) "two:2 and text.")
+                            (ul (i ((level "2")) "three:1 and text.")))
+                        (i ((level "0"))  "one:2 and text.")))
+    (check-equal? (listify (get-elements the-case) bullet? 'ul) result))
+  (test-case
+    "odd HTML thing"
+    (define the-case '(ul "- Switch walls 2 and 3?"
+                          "\n" 
+                          (p 
+                            "3|       " "\n"
+                            "2|* w *  " "\n"
+                            "1|* w * *" "\n"
+                            "0|-------" "\n"
+                            "  0 1 2 3" "\n"
+                            )
+                          "\n" 
+                          "- Add height 0, 1, or 2 walls between walls 2 and 3? In the diagram"
+                          "\n"
+                          "position 6 is what used to be position 3."
+                          (p
+                            "3|             " "\n"
+                            "2|* w       * *" "\n"
+                            "1|* w * *   * *" "\n"
+                            "0|-------------" "\n"
+                            "  0 1 2 3 4 5 6" "\n"
+                            )
+                          "\n" 
+                          "- Add height 0 or 1 walls between walls 0 and 1?"))
+    (define result `(ul (i ((level "0"))
+                           "Switch walls 2 and 3?"
+                          "\n" 
+                          (p 
+                            "3|       " "\n"
+                            "2|* w *  " "\n"
+                            "1|* w * *" "\n"
+                            "0|-------" "\n"
+                            "  0 1 2 3" "\n"
+                            ))
+                        (i ((level "0"))
+                          "Add height 0, 1, or 2 walls between walls 2 and 3? In the diagram"
+                          "\n"
+                          "position 6 is what used to be position 3."
+                          (p
+                            "3|             " "\n"
+                            "2|* w       * *" "\n"
+                            "1|* w * *   * *" "\n"
+                            "0|-------------" "\n"
+                            "  0 1 2 3 4 5 6" "\n"
+                            ))
+                        (i ((level "0")) "Add height 0 or 1 walls between walls 0 and 1?")))
     (check-equal? (listify (get-elements the-case) bullet? 'ul) result)))
