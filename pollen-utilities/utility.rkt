@@ -147,82 +147,109 @@
 
 
 (define printable? (or/c string? number? symbol?))
-; list? procedure? #:keep-where procedure? -> list?
+
+; list? procedure? 
+;   #:keep-where procedure? 
+;   #:split-map procedure?
+;   #:keep-empty-splits? boolean?
+;   #:action (or/c procedure? #f)
+; -> list?
 ; Somewhat similar to the split procedure for strings. Takes a list
 ; and returns a list of the same elements of lst, in the same order,
 ; but placed in sublists. Each sublist ends where an element occurs
 ; that causes (split-pred? element current-split tail) to be true. The
-; next sublist picks up from there. If a split should be empty (such
-; as when there are two consecutive elements that cause split-pred? to
-; be true), then those splits are not kept.
-; The split-map option is supplied because the output of split-where
-; may not be a list of splits if the #:keep-where function returns
-; 'separate. In this case, the split element is placed on it's own in
-; the list of splits. Mapping over the splits (and only the splits) is
-; a common enough use-case, I think, that the optional parameter is
+; next sublist picks up from there. 
+; - The #:keep-where procedure determines where an element that causes
+;   a split will go. If the procedure returns:
+;       - 'current: The element which caused the split will be placed
+;         at the end of the sublist that was being built when the
+;         element was encountered.
+;       - 'next: The element which caused the split will be placed
+;         at the start of the next sublist that will be built up.
+;       - 'separate: The element will be placed on its own. It won't
+;         be in a sublist, the element itself will be placed between
+;         the current sublist being built, and the next sublist that
+;         will be built.
+;       - 'ignore: The element will not be placed in any split, nor on
+;         its own. It just gets ignored.
+; - The split-map option is supplied because the output of split-where
+;   may not be a list of splits if the #:keep-where function returns
+;   'separate. In this case, the split element is placed on it's own
+;   in the list of splits. Mapping over the splits (and only the
+;   splits) is a common enough use-case, I think, that the optional
+;   parameter is
 ; warranted.
+; - If a split should be empty (such as when there are two consecutive
+;   elements that cause split-pred? to be true), then those splits are
+;   not kept if #:keep-empty-splits? is false. Otherwise, the splits
+;   are kept.
+; - #:action is a procedure that should take the following paramters:
+;   current-split, splits, remaining and return (values
+;   next-current-split, next-splits, next-remaining). This allows
+;   total control over how to produce splits from the function, if
+;   that's desired.
+;
 ; The reason why the objects at which we split are not placed in the
 ; list as splits is that this function takes after split-string, and
 ; functions like it from other languages. The thing upon which we
 ; split is normally removed. Not considered. There are use cases where
 ; you wouldn't want to throw away that which you split upon, but you'd
 ; want to run a function over everything else.
-(define (split-where lst split-pred? 
-          #:keep-where [keep-pred? (λ _ #f)]
-          #:split-map [split-func #f]
+(define (split-where 
+          lst split-pred?
+          #:keep-where [keep-pred? (λ _ 'ignore)]
+          #:split-map [split-func identity]
           #:action [loop-body #f])
-  (define (iter current-split splits remaining)
-    (cond 
-      [(null? remaining) 
-       (cond
-         [(null? current-split) splits]
-         [split-func (cons (split-func (reverse current-split)) splits)]
-         [else (cons (reverse current-split) splits)])]
-      [else
-        (match-let
-          [((cons elem tail) remaining)]
-          (if (split-pred? elem current-split tail)
-            (let* 
-              [(decision (keep-pred? elem current-split
-                                     tail))
-               (new-current-split
-                 (case decision
-                   [(next) (list elem)]
-                   [else null]))
-               (final-current-split-contents
-                 (reverse
-                   (case decision
-                     [(current) (cons elem current-split)]
-                     [else current-split])))
-               (processed-current-split
-                 (cond
-                   [(null? final-current-split-contents)
-                    final-current-split-contents]
-                   [split-func
-                     (split-func final-current-split-contents)]
-                   [else final-current-split-contents]))
-               (new-splits
-                 (begin 
-                   (if (eq? decision 'separate)
-                     (list elem processed-current-split)
-                     (void))
-                   (case decision
-                     [(separate #t)
-                      (if (null? processed-current-split)
-                        (cons elem splits)
-                        (append (list elem processed-current-split)
-                                splits))]
-                     [else
-                       (if (null? processed-current-split)
-                         splits
-                         (cons processed-current-split splits))])))]
-              (iter new-current-split
-                    new-splits
-                    tail))
-            (iter (cons elem current-split)
+  (define (update-splits-list current-split element decision splits)
+    (define finished-splits 
+      (make-finished-splits current-split element decision))
+    (append finished-splits splits))
+  (define (make-finished-splits current-split element decision)
+    (define current-split-before-map
+      (if (eq? decision 'current)
+        (cons element current-split)
+        current-split))
+    (define finished-current-split
+      (if (null? current-split-before-map)
+        current-split-before-map
+        (split-func (reverse current-split-before-map))))
+    (define splits null)
+    (unless (null? finished-current-split)
+      (set! splits (cons finished-current-split splits)))
+    ; split-func is not applied when a split is kept using 'separate.
+    ; Nor is it wrapped in a list like other splits.
+    (when (eq? decision 'separate)
+      (set! splits (cons element splits)))
+    splits)
+  (define (make-new-split element decision)
+    (case decision
+      [(next) (list element)]
+      [else null]))
+
+  (define-values (last-split splits _)
+    (if loop-body
+      (for/fold
+        ([current-split null] [splits null] [remaining lst])
+        ([element lst])
+        (loop-body current-split splits remaining))
+      (for/fold 
+        ([current-split null] [splits null] [remaining lst])
+        ([element lst])
+        (define tail (cdr remaining))
+        (define split? (split-pred? element current-split tail))
+        (define decision (keep-pred? element current-split tail))
+        (if (not split?)
+          (values (cons element current-split)
                   splits
-                  tail)))]))
-  (reverse (iter null null lst)))
+                  tail)
+          (values (make-new-split element decision)
+                  (update-splits-list
+                    current-split element decision splits)
+                  tail)))))
+  (reverse
+    (if (null? last-split)
+      splits
+      (cons (split-func (reverse last-split)) splits))))
 
 ; any/c lambda? -> any/c
 ; If a value is a list, then it will reverse the list and all lists
@@ -305,105 +332,6 @@
         (decode xexp1 #:txexpr-proc (decode-flattener #:only '(a d))))))
     (define (split a-case) 
       (split-where a-case (λ (e . _) (eq? 's e))))
-
-; list? procedure? 
-;   #:keep-where procedure? 
-;   #:split-map procedure?
-;   #:keep-empty-splits? boolean?
-;   #:action (or/c procedure? #f)
-; -> list?
-; Somewhat similar to the split procedure for strings. Takes a list
-; and returns a list of the same elements of lst, in the same order,
-; but placed in sublists. Each sublist ends where an element occurs
-; that causes (split-pred? element current-split tail) to be true. The
-; next sublist picks up from there. 
-; - The #:keep-where procedure determines where an element that causes
-;   a split will go. If the procedure returns:
-;       - 'current: The element which caused the split will be placed
-;         at the end of the sublist that was being built when the
-;         element was encountered.
-;       - 'next: The element which caused the split will be placed
-;         at the start of the next sublist that will be built up.
-;       - 'separate: The element will be placed on its own. It won't
-;         be in a sublist, the element itself will be placed between
-;         the current sublist being built, and the next sublist that
-;         will be built.
-;       - 'ignore: The element will not be placed in any split, nor on
-;         its own. It just gets ignored.
-; - The split-map option is supplied because the output of split-where
-;   may not be a list of splits if the #:keep-where function returns
-;   'separate. In this case, the split element is placed on it's own
-;   in the list of splits. Mapping over the splits (and only the
-;   splits) is a common enough use-case, I think, that the optional
-;   parameter is
-; warranted.
-; - If a split should be empty (such as when there are two consecutive
-;   elements that cause split-pred? to be true), then those splits are
-;   not kept if #:keep-empty-splits? is false. Otherwise, the splits
-;   are kept.
-; - #:action is a procedure that should take the following paramters:
-;   current-split, splits, remaining and return (values
-;   next-current-split, next-splits, next-remaining). This allows
-;   total control over how to produce splits from the function, if
-;   that's desired.
-;
-; The reason why the objects at which we split are not placed in the
-; list as splits is that this function takes after split-string, and
-; functions like it from other languages. The thing upon which we
-; split is normally removed. Not considered. There are use cases where
-; you wouldn't want to throw away that which you split upon, but you'd
-; want to run a function over everything else.
-(define (alternate-split-where 
-          lst split-pred?
-          #:keep-where [keep-pred? (λ _ 'ignore)]
-          #:split-map [split-func reverse]
-          #:keep-empty-splits? [keep-empty-splits? #f]
-          #:action [loop-body #f])
-  (define-values (last-split splits _)
-    (if loop-body
-      (for/fold
-        ([current-split null] [splits null] [remaining lst])
-        ([element lst])
-        (loop-body current-split splits remaining))
-      (for/fold 
-        ([current-split null] [splits null] [remaining lst])
-        ([element lst])
-        (define tail (cdr remaining))
-        (define split? (split-pred? element current-split tail))
-        (define decision (keep-pred? element current-split tail))
-        (if (not split?)
-          (values (cons element current-split)
-                  splits
-                  tail)
-          (let*
-            ((next-split
-               (if (eq? decision 'next)
-                 (list element)
-                 null))
-             (processed-current-split
-               (if (eq? decision 'current)
-                 (split-func (cons element current-split))
-                 (split-func current-split)))
-             (new-splits
-               (match (list decision (null? processed-current-split))
-                 [(list 'separate #t)
-                  (cons element splits)]
-                 [(list 'separate #f)
-                  (append (list element processed-current-split)
-                          splits)]
-                 [(list (not 'separate) #t) splits]
-                 [(list (not 'separate) #f) 
-                  (cons processed-current-split splits)])))
-            (values next-split new-splits tail)))
-        (values (cons element current-split)
-                splits
-                tail))))
-  (reverse
-    (cond ((null? last-split) splits)
-          (else (cons (split-func last-split) splits)))))
-
-
-
   (test-case
     "split-where 1"
     (define the-case '(0 1 2 s 3 4 5 s s 6 7 8 9 10 s))
