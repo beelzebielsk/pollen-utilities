@@ -303,30 +303,8 @@
       (check-equal? 
         `(root ,@(get-elements a) ,b ,c ,@(get-elements d))
         (decode xexp1 #:txexpr-proc (decode-flattener #:only '(a d))))))
-  (test-case
-    "split-where"
-    (define case1 '(0 1 2 s 3 4 5 s s 6 7 8 9 10 s))
-    (define case2 '(10 8 9 7 6 5 4 3 2 1))
-    (define case3 '(10 8 9 s 7 6 s 5 s s 4 s 3 2 1 s))
-    (define case4 '(s 10 8 9 s 7 6 s 5 s s 4 s 3 2 1 s))
-    (define case5 '(s))
     (define (split a-case) 
       (split-where a-case (λ (e . _) (eq? 's e))))
-    (check-equal?
-      '((0 1 2) (3 4 5) (6 7 8 9 10))
-      (split case1))
-    (check-equal?
-      (list case2)
-      (split case2))
-    (check-equal?
-      '((10 8 9) (7 6) (5) (4) (3 2 1))
-      (split case3))
-    (check-equal?
-      (split case3)
-      (split case4))
-    (check-equal?
-      '()
-      (split case5))))
 
 ; list? procedure? 
 ;   #:keep-where procedure? 
@@ -426,6 +404,31 @@
 
 
 
+  (test-case
+    "split-where 1"
+    (define the-case '(0 1 2 s 3 4 5 s s 6 7 8 9 10 s))
+    (define expected-result '((0 1 2) (3 4 5) (6 7 8 9 10)))
+    (check-equal? (split the-case) expected-result))
+  (test-case
+    "split-where 2"
+    (define the-case '(10 8 9 7 6 5 4 3 2 1))
+    (define expected-result (list the-case))
+    (check-equal? (split the-case) expected-result))
+  (test-case
+    "split-where 3"
+    (define the-case '(10 8 9 s 7 6 s 5 s s 4 s 3 2 1 s))
+    (define expected-result '((10 8 9) (7 6) (5) (4) (3 2 1)))
+    (check-equal? (split the-case) expected-result))
+  (test-case
+    "split-where 4"
+    (define the-case '(s 10 8 9 s 7 6 s 5 s s 4 s 3 2 1 s))
+    (define expected-result '((10 8 9) (7 6) (5) (4) (3 2 1)))
+    (check-equal? (split the-case) expected-result))
+  (test-case
+    "split-where 5"
+    (define the-case '(s))
+    (define expected-result null)
+    (check-equal? (split the-case) expected-result)))
 
 
 ; TODO:
