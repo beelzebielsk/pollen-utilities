@@ -5,52 +5,6 @@
 
 ; Pollen Helpers: {{{ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-; A macro which will take an expression, print some information about
-; it, and then replace itself with the original expression. For
-; debugging purposes.
-(define-syntax (report stx)
-  (syntax-case stx ()
-    [(report EXPR REPORT-NAME)
-     #'(let*
-         [(result EXPR)
-          (expr-length 25)
-          (expr-string (~v (syntax->datum #'EXPR)))
-          (abbrev-expr
-            (if (> (string-length expr-string) expr-length)
-              (string-append (substring expr-string 0 expr-length) "...")
-              expr-string))
-          (line (syntax-line #'EXPR))
-          (col (syntax-column #'EXPR))
-          (report-name REPORT-NAME)
-          (source-name 
-            (if (syntax-source-module #'EXPR)
-              (last
-                (explode-path
-                  (resolved-module-path-name
-                    (module-path-index-resolve 
-                      (syntax-source-module #'EXPR)))))
-              #f))
-          ]
-         (displayln
-           (string-append
-             ; If the syntax object is from some other module...
-             (cond
-               [(and source-name report-name)
-                (format "[From ~a, ~a]" source-name report-name)]
-               [source-name
-                 (format "[From ~a]" source-name)]
-               [report-name
-                 (format "[From (n/a src mod) ~a]" report-name)]
-               [else ""])
-             (format "(line ~a, col ~a): Expression ~a results in ~v"
-                     line
-                     col
-                     abbrev-expr
-                     result)
-             ))
-         result)]
-    [(report EXPR) #'(report EXPR #f)]))
-
 ; Makes it so that a list of elements appears in the pollen document
 ; as if they were not enclosed in a list. Like when/splice, but always
 ; happens. The map here is for just in case something is produced that
@@ -77,9 +31,6 @@
 (define (@-flatten txpr) 
   (decode txpr
           #:txexpr-proc (decode-flattener #:only '(@))))
-
-; TODO: Under construction macro, which will take a list of tag names
-; and create tag functions that output the empty string.
 
 ; }}} ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
